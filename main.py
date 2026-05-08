@@ -1,33 +1,26 @@
 #!/usr/bin/env python3
 """
-O'zbekiston OTM Ta'lim Boti
-Mustaqil ish va Kurs ishini OTM standartlarida tayyorlab beruvchi Telegram bot
+O'zbekiston OTM Ta'lim Boti v2
+Reja → Bo'limlar → Word fayl arxitekturasi
 """
 
-import os
-import io
-import re
-import logging
+import os, io, re, logging, json
+import google.generativeai as genai
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler,
     filters, ContextTypes
 )
-import google.generativeai as genai
 from docx import Document
 from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ── Sozlamalar ────────────────────────────────────────────────────
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GEMINI_KEY = os.environ["GEMINI_API_KEY"]
 genai.configure(api_key=GEMINI_KEY)
@@ -36,117 +29,72 @@ gemini = genai.GenerativeModel(
     generation_config={"max_output_tokens": 8192, "temperature": 0.7}
 )
 
-# Suhbat bosqichlari
+# Bosqichlar
 LANG, WORK_TYPE, UNIVERSITY, FACULTY, DIRECTION, SUBJECT, STUDENT_NAME, COURSE, STUDY_TYPE, TOPIC = range(10)
 
-# ── Matnlar (3 tilda) ─────────────────────────────────────────────
+# ── Matnlar ───────────────────────────────────────────────────────
 T = {
     "uz": {
-        "welcome": (
-            "👋 *Assalomu alaykum!*\n\n"
-            "Men O'zbekiston OTM standartlarida yozma ishlar tayyorlab beruvchi botman:\n\n"
-            "📝 *Mustaqil ish* — 15–20 sahifa\n"
-            "📚 *Kurs ishi* — 25–35 sahifa\n\n"
-            "Tayyor bo'lgan ish Word (.docx) formatida yuboriladi.\n\n"
-            "🌐 *Tilni tanlang:*"
-        ),
+        "welcome": "👋 *Assalomu alaykum!*\n\nMen O'zbekiston OTM standartlarida yozma ishlar tayyorlab beruvchi botman.\n\n📝 *Mustaqil ish* — 15–20 sahifa\n📚 *Kurs ishi* — 25–35 sahifa\n\nTayyor ish Word (.docx) formatida yuboriladi.\n\n🌐 *Tilni tanlang:*",
         "work_type": "📋 Qanday ish kerak?",
         "mustaqil": "📝 Mustaqil ish",
         "kurs": "📚 Kurs ishi",
-        "university": "🏛 *Universitetingiz* nomini to'liq kiriting:\n_(masalan: Mirzo Ulug'bek nomidagi O'zbekiston Milliy Universiteti)_",
-        "faculty": "🏫 *Fakultetingiz* nomini kiriting:\n_(masalan: Ijtimoiy fanlar fakulteti)_",
-        "direction": "📖 *Yo'nalishingizni* kiriting:\n_(masalan: Amaliy psixologiya yo'nalishi)_",
-        "subject": "📚 *Fan nomini* kiriting:\n_(masalan: Sotsiologiya)_",
-        "student": "👤 *Ism va familiyangizni* kiriting:\n_(masalan: Abdullayev Jasur Baxtiyorovich)_",
-        "course": "🎓 *Nechanchi kursda* o'qiysiz?\n_(1 dan 4 gacha raqam kiriting)_",
+        "university": "🏛 *Universitetingiz* nomini to'liq kiriting:",
+        "faculty": "🏫 *Fakultetingiz* nomini kiriting:",
+        "direction": "📖 *Yo'nalishingizni* kiriting:",
+        "subject": "📚 *Fan nomini* kiriting:",
+        "student": "👤 *Ism va familiyangizni* kiriting:",
+        "course": "🎓 *Nechanchi kursda* o'qiysiz? (1-4):",
         "study_type": "📅 O'qish shaklini tanlang:",
-        "kunduzgi": "☀️ Kunduzgi",
-        "sirtqi": "🌙 Sirtqi",
-        "kechki": "🌆 Kechki",
-        "topic": (
-            "✏️ *Ish mavzusini* kiriting:\n\n"
-            "_Masalan: Ijtimoiy munosabatlar tushunchasi va uning turlari_\n\n"
-            "⚡ Mavzu qanchalik aniq bo'lsa, ish shunchalik sifatli bo'ladi!"
-        ),
-        "generating": (
-            "⏳ *Ish tayyorlanmoqda...*\n\n"
-            "Bu 1–3 daqiqa olishi mumkin.\n"
-            "Iltimos, kuting 🙏"
-        ),
+        "kunduzgi": "☀️ Kunduzgi", "sirtqi": "🌙 Sirtqi", "kechki": "🌆 Kechki",
+        "topic": "✏️ *Ish mavzusini* kiriting:\n\n⚡ Mavzu qanchalik aniq bo'lsa, ish shunchalik sifatli bo'ladi!",
+        "planning": "📋 *Reja tuzilmoqda...*\n\nBir daqiqa kuting ⏳",
+        "generating_section": "✍️ *{section} yozilmoqda...*\n\n_{progress}_",
+        "combining": "📎 *Fayl tayyorlanmoqda...*",
         "done": "✅ *Ish tayyor!* Word formatida yuborilmoqda...",
         "error": "❌ Xatolik yuz berdi. /start bilan qaytadan urinib ko'ring.",
-        "invalid_course": "⚠️ Iltimos, 1 dan 4 gacha raqam kiriting.",
+        "invalid_course": "⚠️ 1 dan 4 gacha raqam kiriting.",
         "restart": "\n\n🔄 Yangi ish uchun: /start",
     },
     "ru": {
-        "welcome": (
-            "👋 *Здравствуйте!*\n\n"
-            "Я бот для написания учебных работ по стандартам узбекских вузов:\n\n"
-            "📝 *Самостоятельная работа* — 15–20 страниц\n"
-            "📚 *Курсовая работа* — 25–35 страниц\n\n"
-            "Готовая работа отправляется в формате Word (.docx).\n\n"
-            "🌐 *Выберите язык:*"
-        ),
+        "welcome": "👋 *Здравствуйте!*\n\nЯ бот для написания учебных работ по стандартам узбекских вузов.\n\n📝 *Самостоятельная работа* — 15–20 страниц\n📚 *Курсовая работа* — 25–35 страниц\n\nГотовая работа отправляется в формате Word (.docx).\n\n🌐 *Выберите язык:*",
         "work_type": "📋 Какая работа нужна?",
         "mustaqil": "📝 Самостоятельная работа",
         "kurs": "📚 Курсовая работа",
-        "university": "🏛 Введите *полное название университета*:\n_(например: Национальный университет Узбекистана им. Мирзо Улугбека)_",
-        "faculty": "🏫 Введите *название факультета*:\n_(например: Факультет социальных наук)_",
-        "direction": "📖 Введите *направление обучения*:\n_(например: Прикладная психология)_",
-        "subject": "📚 Введите *название предмета*:\n_(например: Социология)_",
-        "student": "👤 Введите *ваше имя и фамилию*:\n_(например: Иванов Иван Иванович)_",
-        "course": "🎓 На *каком курсе* вы учитесь?\n_(введите цифру от 1 до 4)_",
+        "university": "🏛 Введите *полное название университета*:",
+        "faculty": "🏫 Введите *название факультета*:",
+        "direction": "📖 Введите *направление обучения*:",
+        "subject": "📚 Введите *название предмета*:",
+        "student": "👤 Введите *ваше имя и фамилию*:",
+        "course": "🎓 На *каком курсе* вы учитесь? (1-4):",
         "study_type": "📅 Выберите форму обучения:",
-        "kunduzgi": "☀️ Дневное",
-        "sirtqi": "🌙 Заочное",
-        "kechki": "🌆 Вечернее",
-        "topic": (
-            "✏️ Введите *тему работы*:\n\n"
-            "_Например: Понятие социальных отношений и их виды_\n\n"
-            "⚡ Чем точнее тема, тем качественнее работа!"
-        ),
-        "generating": (
-            "⏳ *Работа готовится...*\n\n"
-            "Это займёт 1–3 минуты.\n"
-            "Пожалуйста, подождите 🙏"
-        ),
+        "kunduzgi": "☀️ Дневное", "sirtqi": "🌙 Заочное", "kechki": "🌆 Вечернее",
+        "topic": "✏️ Введите *тему работы*:\n\n⚡ Чем точнее тема, тем качественнее работа!",
+        "planning": "📋 *Составляется план...*\n\nОдну минуту ⏳",
+        "generating_section": "✍️ *Пишется {section}...*\n\n_{progress}_",
+        "combining": "📎 *Файл готовится...*",
         "done": "✅ *Работа готова!* Отправляю в формате Word...",
         "error": "❌ Произошла ошибка. Попробуйте /start снова.",
         "invalid_course": "⚠️ Введите цифру от 1 до 4.",
         "restart": "\n\n🔄 Для новой работы: /start",
     },
     "en": {
-        "welcome": (
-            "👋 *Hello!*\n\n"
-            "I'm a bot for writing academic papers per Uzbekistan HEI standards:\n\n"
-            "📝 *Independent work* — 15–20 pages\n"
-            "📚 *Course work* — 25–35 pages\n\n"
-            "The finished work is sent in Word (.docx) format.\n\n"
-            "🌐 *Choose language:*"
-        ),
+        "welcome": "👋 *Hello!*\n\nI'm a bot for writing academic papers per Uzbekistan HEI standards.\n\n📝 *Independent work* — 15–20 pages\n📚 *Course work* — 25–35 pages\n\nThe finished work is sent in Word (.docx) format.\n\n🌐 *Choose language:*",
         "work_type": "📋 What type of work do you need?",
         "mustaqil": "📝 Independent work",
         "kurs": "📚 Course work",
-        "university": "🏛 Enter the *full university name*:\n_(e.g. National University of Uzbekistan named after Mirzo Ulugbek)_",
-        "faculty": "🏫 Enter your *faculty name*:\n_(e.g. Faculty of Social Sciences)_",
-        "direction": "📖 Enter your *study direction*:\n_(e.g. Applied Psychology)_",
-        "subject": "📚 Enter the *subject name*:\n_(e.g. Sociology)_",
-        "student": "👤 Enter your *full name*:\n_(e.g. John Smith)_",
-        "course": "🎓 Which *year* are you in?\n_(enter a number from 1 to 4)_",
+        "university": "🏛 Enter the *full university name*:",
+        "faculty": "🏫 Enter your *faculty name*:",
+        "direction": "📖 Enter your *study direction*:",
+        "subject": "📚 Enter the *subject name*:",
+        "student": "👤 Enter your *full name*:",
+        "course": "🎓 Which *year* are you in? (1-4):",
         "study_type": "📅 Select study type:",
-        "kunduzgi": "☀️ Full-time",
-        "sirtqi": "🌙 Part-time",
-        "kechki": "🌆 Evening",
-        "topic": (
-            "✏️ Enter the *work topic*:\n\n"
-            "_E.g. The concept of social relations and their types_\n\n"
-            "⚡ The more specific the topic, the better the work!"
-        ),
-        "generating": (
-            "⏳ *Preparing the work...*\n\n"
-            "This may take 1–3 minutes.\n"
-            "Please wait 🙏"
-        ),
+        "kunduzgi": "☀️ Full-time", "sirtqi": "🌙 Part-time", "kechki": "🌆 Evening",
+        "topic": "✏️ Enter the *work topic*:\n\n⚡ The more specific the topic, the better the work!",
+        "planning": "📋 *Creating outline...*\n\nOne moment ⏳",
+        "generating_section": "✍️ *Writing {section}...*\n\n_{progress}_",
+        "combining": "📎 *Preparing file...*",
         "done": "✅ *Work is ready!* Sending in Word format...",
         "error": "❌ An error occurred. Try /start again.",
         "invalid_course": "⚠️ Please enter a number from 1 to 4.",
@@ -160,7 +108,6 @@ STUDY_TYPES = {
     "en": {"kunduzgi": "full-time", "sirtqi": "part-time", "kechki": "evening"},
 }
 
-# ── Klaviaturalar ─────────────────────────────────────────────────
 def lang_kb():
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("🇺🇿 O'zbek", callback_data="lang_uz"),
@@ -183,475 +130,309 @@ def study_kb(lang):
         InlineKeyboardButton(t["kechki"], callback_data="study_kechki"),
     ]])
 
-# ── Claude prompts ────────────────────────────────────────────────
-def prompt_mustaqil(d: dict) -> str:
+# ── Gemini yordamchi funksiya ─────────────────────────────────────
+def ask_gemini(prompt: str) -> str:
+    response = gemini.generate_content(prompt)
+    return response.text.strip()
+
+# ── REJA TUZISH ───────────────────────────────────────────────────
+def make_plan_prompt(d: dict) -> str:
+    lang, topic, subject = d["lang"], d["topic"], d["subject"]
+    work = d["work_type"]
+
+    if lang == "uz":
+        if work == "mustaqil":
+            return f"""Sen O'zbekiston universiteti talabasi uchun "{subject}" fanidan "{topic}" mavzusida mustaqil ish rejasini tuzmoqdasiz.
+
+Faqat JSON formatida javob ber, boshqa hech narsa yozma:
+
+{{
+  "kirish_rejasi": "Kirish bo'limi uchun 3-4 ta asosiy nuqta (vergul bilan ajratilgan)",
+  "bolim1_nomi": "Birinchi bo'lim sarlavhasi",
+  "bolim1_kichik": ["1.1 kichik sarlavha", "1.2 kichik sarlavha", "1.3 kichik sarlavha"],
+  "bolim2_nomi": "Ikkinchi bo'lim sarlavhasi",
+  "bolim2_kichik": ["2.1 kichik sarlavha", "2.2 kichik sarlavha", "2.3 kichik sarlavha"],
+  "bolim3_nomi": "Uchinchi bo'lim sarlavhasi",
+  "bolim3_kichik": ["3.1 kichik sarlavha", "3.2 kichik sarlavha", "3.3 kichik sarlavha"],
+  "xulosa_rejasi": "Xulosa uchun 3-4 ta asosiy nuqta (vergul bilan ajratilgan)"
+}}"""
+        else:
+            return f"""Sen O'zbekiston universiteti talabasi uchun "{subject}" fanidan "{topic}" mavzusida kurs ishi rejasini tuzmoqdasiz.
+
+Faqat JSON formatida javob ber:
+
+{{
+  "kirish_rejasi": "Kirish elementlari: dolzarbligi, o'rganilganlik darajasi, maqsad, vazifalar, ob'ekt, predmet, ahamiyati",
+  "bob1_nomi": "I Bobning sarlavhasi (nazariy asoslar)",
+  "bob1_par1": "1.1 paragraf sarlavhasi",
+  "bob1_par2": "1.2 paragraf sarlavhasi",
+  "bob1_par3": "1.3 paragraf sarlavhasi",
+  "bob2_nomi": "II Bobning sarlavhasi (amaliy qism)",
+  "bob2_par1": "2.1 paragraf sarlavhasi",
+  "bob2_par2": "2.2 paragraf sarlavhasi",
+  "bob2_par3": "2.3 paragraf sarlavhasi",
+  "xulosa_rejasi": "Xulosa uchun asosiy fikrlar"
+}}"""
+    elif lang == "ru":
+        if work == "mustaqil":
+            return f"""Составь план самостоятельной работы по предмету "{subject}" на тему "{topic}".
+
+Ответь только в формате JSON:
+
+{{
+  "kirish_rejasi": "Основные пункты введения через запятую",
+  "bolim1_nomi": "Название первого раздела",
+  "bolim1_kichik": ["1.1 подзаголовок", "1.2 подзаголовок", "1.3 подзаголовок"],
+  "bolim2_nomi": "Название второго раздела",
+  "bolim2_kichik": ["2.1 подзаголовок", "2.2 подзаголовок", "2.3 подзаголовок"],
+  "bolim3_nomi": "Название третьего раздела",
+  "bolim3_kichik": ["3.1 подзаголовок", "3.2 подзаголовок", "3.3 подзаголовок"],
+  "xulosa_rejasi": "Основные пункты заключения через запятую"
+}}"""
+        else:
+            return f"""Составь план курсовой работы по предмету "{subject}" на тему "{topic}".
+
+Ответь только в формате JSON:
+
+{{
+  "kirish_rejasi": "Элементы введения: актуальность, изученность, цель, задачи, объект, предмет, значимость",
+  "bob1_nomi": "Название I главы (теоретические основы)",
+  "bob1_par1": "Название параграфа 1.1",
+  "bob1_par2": "Название параграфа 1.2",
+  "bob1_par3": "Название параграфа 1.3",
+  "bob2_nomi": "Название II главы (практическая часть)",
+  "bob2_par1": "Название параграфа 2.1",
+  "bob2_par2": "Название параграфа 2.2",
+  "bob2_par3": "Название параграфа 2.3",
+  "xulosa_rejasi": "Основные мысли заключения"
+}}"""
+    else:
+        if work == "mustaqil":
+            return f"""Create an outline for an independent work on "{subject}", topic: "{topic}".
+
+Reply only in JSON format:
+
+{{
+  "kirish_rejasi": "Main introduction points separated by comma",
+  "bolim1_nomi": "First section title",
+  "bolim1_kichik": ["1.1 subtitle", "1.2 subtitle", "1.3 subtitle"],
+  "bolim2_nomi": "Second section title",
+  "bolim2_kichik": ["2.1 subtitle", "2.2 subtitle", "2.3 subtitle"],
+  "bolim3_nomi": "Third section title",
+  "bolim3_kichik": ["3.1 subtitle", "3.2 subtitle", "3.3 subtitle"],
+  "xulosa_rejasi": "Main conclusion points separated by comma"
+}}"""
+        else:
+            return f"""Create an outline for a course work on "{subject}", topic: "{topic}".
+
+Reply only in JSON format:
+
+{{
+  "kirish_rejasi": "Introduction elements: relevance, literature, goal, tasks, object, subject, significance",
+  "bob1_nomi": "Chapter I title (theoretical foundations)",
+  "bob1_par1": "Section 1.1 title",
+  "bob1_par2": "Section 1.2 title",
+  "bob1_par3": "Section 1.3 title",
+  "bob2_nomi": "Chapter II title (practical part)",
+  "bob2_par1": "Section 2.1 title",
+  "bob2_par2": "Section 2.2 title",
+  "bob2_par3": "Section 2.3 title",
+  "xulosa_rejasi": "Main conclusion thoughts"
+}}"""
+
+# ── BO'LIM YOZISH ─────────────────────────────────────────────────
+def write_section(d: dict, section_name: str, section_type: str, plan: dict, extra: str = "") -> str:
     lang, topic, subject = d["lang"], d["topic"], d["subject"]
     course, study = d["course"], d["study_type"]
 
     if lang == "uz":
-        return f"""Siz O'zbekiston universiteti {course}-kurs {study} talabasi uchun "{subject}" fanidan "{topic}" mavzusida MUSTAQIL ISH yozmoqdasiz.
+        base = f'"{subject}" fanidan "{topic}" mavzusidagi yozma ish uchun'
+        inst = f"O'zbek tilida, ilmiy uslubda yoz. Kamida 600 so'z. Paragraflar bilan. Sarlavha yozma, faqat matn."
+    elif lang == "ru":
+        base = f'для работы по предмету "{subject}" на тему "{topic}"'
+        inst = f"Пиши на русском языке, научным стилем. Минимум 600 слов. С абзацами. Без заголовка, только текст."
+    else:
+        base = f'for the work on "{subject}", topic: "{topic}"'
+        inst = f"Write in English, academic style. Minimum 600 words. With paragraphs. No heading, just text."
 
-TALABLAR:
-- O'zbek tilida, ilmiy uslubda
-- Har bir bo'lim KAMIDA 700 so'z
-- Jami matn 15-20 sahifaga mos bo'lsin
-- Faktlar, tahlil, ilmiy asoslar bo'lsin
+    if section_type == "kirish":
+        if lang == "uz":
+            prompt = f"""{base} KIRISH bo'limini yoz.
+Quyidagilarni qamrab ol: mavzuning dolzarbligi, o'rganilganlik darajasi, maqsad, vazifalar, ob'ekt va predmet, ahamiyati.
+{inst}"""
+        elif lang == "ru":
+            prompt = f"""{base} напиши ВВЕДЕНИЕ.
+Включи: актуальность, степень изученности, цель, задачи, объект и предмет, значимость.
+{inst}"""
+        else:
+            prompt = f"""{base} write the INTRODUCTION.
+Include: relevance, literature review, goal, tasks, object and subject, significance.
+{inst}"""
 
-Quyidagi ANIQ belgilar bilan yozing (belgilarni o'zgartirmang!):
+    elif section_type == "bolim":
+        if lang == "uz":
+            prompt = f"""{base} "{section_name}" bo'limini yoz.
+Bu bo'lim mavzuning muhim jihatlarini chuqur tahlil qilishi kerak.
+Ilmiy dalillar, misollar va tahlillar bilan boyit.
+{inst}"""
+        elif lang == "ru":
+            prompt = f"""{base} напиши раздел "{section_name}".
+Раздел должен глубоко анализировать важные аспекты темы.
+Обогати научными доказательствами, примерами и анализом.
+{inst}"""
+        else:
+            prompt = f"""{base} write the section "{section_name}".
+The section should deeply analyze important aspects of the topic.
+Enrich with scientific evidence, examples and analysis.
+{inst}"""
 
-===KIRISH===
-Mavzuning dolzarbligi, o'rganilganlik darajasi, maqsad va vazifalari haqida 4-5 paragraf. Kamida 450 so'z.
+    elif section_type == "bob_xulosa":
+        if lang == "uz":
+            prompt = f"""{base} "{section_name}" bo'yicha XULOSALAR yoz.
+Bu bobda ko'rib chiqilgan asosiy fikrlarni qisqacha jamla.
+{inst}"""
+        elif lang == "ru":
+            prompt = f"""{base} напиши ВЫВОДЫ по "{section_name}".
+Кратко обобщи основные мысли рассмотренные в этой главе.
+{inst}"""
+        else:
+            prompt = f"""{base} write CONCLUSIONS for "{section_name}".
+Briefly summarize the main ideas covered in this chapter.
+{inst}"""
 
-===BOLIM_1_NOMI===
-(Birinchi bo'lim sarlavhasi - mavzuning birinchi jihatiga oid)
+    elif section_type == "xulosa":
+        if lang == "uz":
+            prompt = f"""{base} umumiy XULOSA yoz.
+Butun ishning asosiy natijalarini, topilmalarini va tavsiyalarni yoz.
+Kamida 400 so'z. {inst}"""
+        elif lang == "ru":
+            prompt = f"""{base} напиши общее ЗАКЛЮЧЕНИЕ.
+Напиши основные результаты, выводы и рекомендации всей работы.
+Минимум 400 слов. {inst}"""
+        else:
+            prompt = f"""{base} write the general CONCLUSION.
+Write the main results, findings and recommendations of the entire work.
+Minimum 400 words. {inst}"""
 
-===BOLIM_1_MATN===
-Birinchi bo'lim to'liq matni. Kamida 750 so'z. Ilmiy tahlil, misollar, nazariya.
+    elif section_type == "glossariy":
+        if lang == "uz":
+            prompt = f"""{base} GLOSSARIY tuz.
+Mavzu bilan bog'liq 15-20 ta muhim atamani izohlanglar.
+Har bir atama: "Atama nomi — ta'rifi (2-3 jumlada)"
+Faqat atamalar ro'yxati, boshqa narsa yozma."""
+        elif lang == "ru":
+            prompt = f"""{base} составь ГЛОССАРИЙ.
+15-20 важных терминов связанных с темой.
+Каждый термин: "Название термина — определение (2-3 предложения)"
+Только список терминов, ничего больше."""
+        else:
+            prompt = f"""{base} create a GLOSSARY.
+15-20 important terms related to the topic.
+Each term: "Term name — definition (2-3 sentences)"
+Only list of terms, nothing else."""
 
-===BOLIM_2_NOMI===
-(Ikkinchi bo'lim sarlavhasi)
-
-===BOLIM_2_MATN===
-Ikkinchi bo'lim to'liq matni. Kamida 750 so'z.
-
-===BOLIM_3_NOMI===
-(Uchinchi bo'lim sarlavhasi)
-
-===BOLIM_3_MATN===
-Uchinchi bo'lim to'liq matni. Kamida 750 so'z.
-
-===XULOSA===
-Asosiy xulosalar, 3-4 paragraf. Kamida 350 so'z.
-
-===ADABIYOTLAR===
-Kamida 12 ta manba, raqamlangan. Format:
+    elif section_type == "adabiyotlar":
+        if lang == "uz":
+            prompt = f"""{base} FOYDALANILGAN ADABIYOTLAR ro'yxatini tuz.
+Kamida 12 ta manba. Format:
 1. Muallif I.O. Kitob nomi. – Shahar: Nashriyot, Yil.
-"""
-    elif lang == "ru":
-        return f"""Напишите самостоятельную работу для студента {course}-го курса ({study}) по предмету "{subject}" на тему "{topic}".
-
-ТРЕБОВАНИЯ:
-- Научный стиль, на русском языке
-- Каждый раздел МИНИМУМ 700 слов
-- Факты, анализ, научная база
-
-Используйте ТОЧНЫЕ маркеры:
-
-===KIRISH===
-Введение: актуальность, степень изученности, цели и задачи. Минимум 450 слов.
-
-===BOLIM_1_NOMI===
-(Название первого раздела)
-
-===BOLIM_1_MATN===
-Текст первого раздела. Минимум 750 слов.
-
-===BOLIM_2_NOMI===
-(Название второго раздела)
-
-===BOLIM_2_MATN===
-Текст второго раздела. Минимум 750 слов.
-
-===BOLIM_3_NOMI===
-(Название третьего раздела)
-
-===BOLIM_3_MATN===
-Текст третьего раздела. Минимум 750 слов.
-
-===XULOSA===
-Заключение, 3-4 абзаца. Минимум 350 слов.
-
-===ADABIYOTLAR===
-Минимум 12 источников, пронумерованных.
-"""
-    else:
-        return f"""Write an independent academic work for a {course}-year ({study}) student on "{subject}", topic: "{topic}".
-
-REQUIREMENTS:
-- Academic style, in English
-- Each section MINIMUM 700 words
-- Facts, analysis, scientific basis
-
-Use EXACT markers:
-
-===KIRISH===
-Introduction: relevance, literature review, goals and objectives. Minimum 450 words.
-
-===BOLIM_1_NOMI===
-(First section title)
-
-===BOLIM_1_MATN===
-First section full text. Minimum 750 words.
-
-===BOLIM_2_NOMI===
-(Second section title)
-
-===BOLIM_2_MATN===
-Second section full text. Minimum 750 words.
-
-===BOLIM_3_NOMI===
-(Third section title)
-
-===BOLIM_3_MATN===
-Third section full text. Minimum 750 words.
-
-===XULOSA===
-Conclusion, 3-4 paragraphs. Minimum 350 words.
-
-===ADABIYOTLAR===
-Minimum 12 numbered sources.
-"""
-
-
-def prompt_kurs(d: dict) -> str:
-    lang, topic, subject = d["lang"], d["topic"], d["subject"]
-    course, study = d["course"], d["study_type"]
-
-    if lang == "uz":
-        return f"""Siz O'zbekiston universiteti {course}-kurs {study} talabasi uchun "{subject}" fanidan "{topic}" mavzusida KURS ISHI yozmoqdasiz.
-
-TALABLAR:
-- O'zbek tilida, ilmiy uslubda
-- Har bir § paragraf KAMIDA 700 so'z
-- Jami 25-35 sahifaga mos
-- Chuqur ilmiy tahlil, faktlar, misollar
-
-Quyidagi ANIQ belgilar bilan yozing:
-
-===KIRISH===
-Kirish bo'limi (kamida 600 so'z):
-- Mavzuning dolzarbligi (2-3 paragraf)
-- Mavzuning nazariy o'rganilganlik darajasi (1-2 paragraf)
-- Kurs ishining maqsadi
-- Kurs ishining vazifalari (5-6 ta, ro'yxat bilan)
-- Kurs ishining ob'ekti va predmeti
-- Nazariy va amaliy ahamiyati
-- Kurs ishining tuzilishi va hajmi
-
-===I_BOB_NOMI===
-(I Bobning to'liq sarlavhasi — nazariy asoslar)
-
-===PAR_1_1_NOMI===
-(1.1 § sarlavhasi)
-
-===PAR_1_1_MATN===
-1.1 § to'liq matni. Kamida 750 so'z. Ilmiy tahlil.
-
-===PAR_1_2_NOMI===
-(1.2 § sarlavhasi)
-
-===PAR_1_2_MATN===
-1.2 § to'liq matni. Kamida 750 so'z.
-
-===PAR_1_3_NOMI===
-(1.3 § sarlavhasi)
-
-===PAR_1_3_MATN===
-1.3 § to'liq matni. Kamida 750 so'z.
-
-===I_BOB_XULOSA===
-I Bob bo'yicha xulosalar. Kamida 280 so'z.
-
-===II_BOB_NOMI===
-(II Bobning to'liq sarlavhasi — amaliy qism)
-
-===PAR_2_1_NOMI===
-(2.1 § sarlavhasi)
-
-===PAR_2_1_MATN===
-2.1 § to'liq matni. Kamida 750 so'z.
-
-===PAR_2_2_NOMI===
-(2.2 § sarlavhasi)
-
-===PAR_2_2_MATN===
-2.2 § to'liq matni. Kamida 750 so'z.
-
-===PAR_2_3_NOMI===
-(2.3 § sarlavhasi)
-
-===PAR_2_3_MATN===
-2.3 § to'liq matni. Kamida 750 so'z.
-
-===II_BOB_XULOSA===
-II Bob bo'yicha xulosalar. Kamida 280 so'z.
-
-===XULOSA===
-Umumiy xulosa. Kamida 420 so'z.
-
-===GLOSSARIY===
-Kamida 20 ta atama. Format:
-**Atama** — ta'rifi (1-2 jumlada aniq izoh)
-
-===ADABIYOTLAR===
-Asosiy adabiyotlar (kamida 12 ta):
-1. ...
-
-Internet manbalar (kamida 5 ta):
-1. ...
-"""
-    elif lang == "ru":
-        return f"""Напишите курсовую работу для студента {course}-го курса ({study}) по предмету "{subject}" на тему "{topic}".
-
-ТРЕБОВАНИЯ:
-- Научный стиль, на русском языке
-- Каждый параграф МИНИМУМ 700 слов
-- Объём 25-35 страниц
-
-Точные маркеры:
-
-===KIRISH===
-Введение (минимум 600 слов): актуальность, степень изученности, цель, задачи (5-6 штук), объект и предмет, значимость, структура работы.
-
-===I_BOB_NOMI===
-(Название I главы — теоретические основы)
-
-===PAR_1_1_NOMI===
-(Название параграфа 1.1)
-
-===PAR_1_1_MATN===
-Текст параграфа 1.1. Минимум 750 слов.
-
-===PAR_1_2_NOMI===
-(Название параграфа 1.2)
-
-===PAR_1_2_MATN===
-Текст параграфа 1.2. Минимум 750 слов.
-
-===PAR_1_3_NOMI===
-(Название параграфа 1.3)
-
-===PAR_1_3_MATN===
-Текст параграфа 1.3. Минимум 750 слов.
-
-===I_BOB_XULOSA===
-Выводы по I главе. Минимум 280 слов.
-
-===II_BOB_NOMI===
-(Название II главы — практическая часть)
-
-===PAR_2_1_NOMI===
-(Название параграфа 2.1)
-
-===PAR_2_1_MATN===
-Текст. Минимум 750 слов.
-
-===PAR_2_2_NOMI===
-(Название параграфа 2.2)
-
-===PAR_2_2_MATN===
-Текст. Минимум 750 слов.
-
-===PAR_2_3_NOMI===
-(Название параграфа 2.3)
-
-===PAR_2_3_MATN===
-Текст. Минимум 750 слов.
-
-===II_BOB_XULOSA===
-Выводы по II главе. Минимум 280 слов.
-
-===XULOSA===
-Общее заключение. Минимум 420 слов.
-
-===GLOSSARIY===
-Минимум 20 терминов. Формат:
-**Термин** — определение
-
-===ADABIYOTLAR===
-Основная литература (минимум 12):
-1. ...
-
-Интернет-источники (минимум 5):
-1. ...
-"""
-    else:
-        return f"""Write a course work for a {course}-year ({study}) student on "{subject}", topic: "{topic}".
-
-REQUIREMENTS:
-- Academic style, in English
-- Each paragraph MINIMUM 700 words
-- Total 25-35 pages
-
-Exact markers:
-
-===KIRISH===
-Introduction (minimum 600 words): relevance, literature review, goal, tasks (5-6 items), object & subject, significance, structure.
-
-===I_BOB_NOMI===
-(Chapter I title — theoretical foundations)
-
-===PAR_1_1_NOMI===
-(Section 1.1 title)
-
-===PAR_1_1_MATN===
-Section 1.1 text. Minimum 750 words.
-
-===PAR_1_2_NOMI===
-(Section 1.2 title)
-
-===PAR_1_2_MATN===
-Section 1.2 text. Minimum 750 words.
-
-===PAR_1_3_NOMI===
-(Section 1.3 title)
-
-===PAR_1_3_MATN===
-Section 1.3 text. Minimum 750 words.
-
-===I_BOB_XULOSA===
-Chapter I conclusions. Minimum 280 words.
-
-===II_BOB_NOMI===
-(Chapter II title — practical part)
-
-===PAR_2_1_NOMI===
-(Section 2.1 title)
-
-===PAR_2_1_MATN===
-Section 2.1 text. Minimum 750 words.
-
-===PAR_2_2_NOMI===
-(Section 2.2 title)
-
-===PAR_2_2_MATN===
-Section 2.2 text. Minimum 750 words.
-
-===PAR_2_3_NOMI===
-(Section 2.3 title)
-
-===PAR_2_3_MATN===
-Section 2.3 text. Minimum 750 words.
-
-===II_BOB_XULOSA===
-Chapter II conclusions. Minimum 280 words.
-
-===XULOSA===
-General conclusion. Minimum 420 words.
-
-===GLOSSARIY===
-Minimum 20 terms. Format:
-**Term** — definition
-
-===ADABIYOTLAR===
-Main sources (minimum 12):
-1. ...
-
-Internet sources (minimum 5):
-1. ...
-"""
-
-
-# ── Parsing ───────────────────────────────────────────────────────
-def parse_sections(text: str) -> dict:
-    parts = re.split(r"===([A-Z0-9_']+)===", text)
-    result = {}
-    for i in range(1, len(parts), 2):
-        key = parts[i].strip()
-        val = parts[i + 1].strip() if i + 1 < len(parts) else ""
-        result[key] = val
-    return result
+Oxirida 4-5 ta internet manba ham qo'sh:
+13. Muallif. Maqola nomi // Sayt nomi. URL: https://... (Murojaat: sana)
+Faqat ro'yxat, boshqa narsa yozma."""
+        elif lang == "ru":
+            prompt = f"""{base} составь СПИСОК ЛИТЕРАТУРЫ.
+Минимум 12 источников. Формат:
+1. Автор И.О. Название книги. – Город: Издательство, Год.
+В конце добавь 4-5 интернет-источника.
+Только список, ничего больше."""
+        else:
+            prompt = f"""{base} create a REFERENCES list.
+Minimum 12 sources. Format:
+1. Author. Book Title. – City: Publisher, Year.
+Add 4-5 internet sources at the end.
+Only the list, nothing else."""
+
+    return ask_gemini(prompt)
 
 
 # ── Word hujjat yaratish ──────────────────────────────────────────
-def doc_setup(doc: Document):
-    """OTM standart formatlash"""
+def doc_setup(doc):
     sec = doc.sections[0]
-    sec.left_margin = Cm(3)
-    sec.right_margin = Cm(1.5)
-    sec.top_margin = Cm(2)
-    sec.bottom_margin = Cm(2)
-
+    sec.left_margin = Cm(3); sec.right_margin = Cm(1.5)
+    sec.top_margin = Cm(2); sec.bottom_margin = Cm(2)
     normal = doc.styles["Normal"]
-    normal.font.name = "Times New Roman"
-    normal.font.size = Pt(14)
+    normal.font.name = "Times New Roman"; normal.font.size = Pt(14)
     pf = normal.paragraph_format
-    pf.line_spacing = Pt(21)
-    pf.first_line_indent = Cm(1.25)
+    pf.line_spacing = Pt(21); pf.first_line_indent = Cm(1.25)
     pf.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    pf.space_before = Pt(0)
-    pf.space_after = Pt(0)
+    pf.space_before = Pt(0); pf.space_after = Pt(0)
 
-
-def add_footer_pagenum(doc: Document):
-    """Pastda sahifa raqami"""
+def add_footer(doc):
     for sec in doc.sections:
-        footer = sec.footer
-        p = footer.paragraphs[0]
+        p = sec.footer.paragraphs[0]
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = p.add_run()
-        run.font.name = "Times New Roman"
-        run.font.size = Pt(12)
-        fld1 = OxmlElement("w:fldChar"); fld1.set(qn("w:fldCharType"), "begin")
-        instr = OxmlElement("w:instrText"); instr.text = "PAGE"
-        fld2 = OxmlElement("w:fldChar"); fld2.set(qn("w:fldCharType"), "end")
-        run._r.extend([fld1, instr, fld2])
+        run.font.name = "Times New Roman"; run.font.size = Pt(12)
+        for tag, txt in [("begin",""), ("end","")]:
+            el = OxmlElement("w:fldChar"); el.set(qn("w:fldCharType"), tag)
+            run._r.append(el)
+            if tag == "begin":
+                ins = OxmlElement("w:instrText"); ins.text = "PAGE"
+                run._r.append(ins)
 
-
-def h(doc: Document, text: str, level: int = 1):
-    """Sarlavha qo'shish"""
+def heading(doc, text, level=1):
     p = doc.add_paragraph()
     p.paragraph_format.first_line_indent = Cm(0)
     p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_before = Pt(14)
     p.paragraph_format.space_after = Pt(8)
     p.paragraph_format.line_spacing = Pt(21)
-    run = p.add_run(text.upper() if level == 1 else text)
-    run.bold = True
-    run.font.name = "Times New Roman"
-    run.font.size = Pt(16 if level == 1 else 14)
+    r = p.add_run(text.upper() if level == 1 else text)
+    r.bold = True; r.font.name = "Times New Roman"
+    r.font.size = Pt(16 if level == 1 else 14)
 
-
-def body(doc: Document, text: str):
-    """Oddiy matn qo'shish"""
+def body_text(doc, text):
     for chunk in text.split("\n\n"):
         chunk = chunk.strip()
-        if not chunk:
-            continue
+        if not chunk: continue
         p = doc.add_paragraph()
         p.paragraph_format.first_line_indent = Cm(1.25)
         p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         p.paragraph_format.line_spacing = Pt(21)
         p.paragraph_format.space_before = Pt(0)
         p.paragraph_format.space_after = Pt(0)
-        run = p.add_run(chunk)
-        run.font.name = "Times New Roman"
-        run.font.size = Pt(14)
+        r = p.add_run(chunk)
+        r.font.name = "Times New Roman"; r.font.size = Pt(14)
 
+def ref_text(doc, text):
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line: continue
+        p = doc.add_paragraph()
+        p.paragraph_format.first_line_indent = Cm(0)
+        p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        p.paragraph_format.line_spacing = Pt(21)
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(0)
+        r = p.add_run(line)
+        r.font.name = "Times New Roman"; r.font.size = Pt(14)
 
-def ref_line(doc: Document, text: str):
-    """Adabiyot qatori (chekinmasiz)"""
-    p = doc.add_paragraph()
-    p.paragraph_format.first_line_indent = Cm(0)
-    p.paragraph_format.left_indent = Cm(0)
-    p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    p.paragraph_format.line_spacing = Pt(21)
-    p.paragraph_format.space_before = Pt(0)
-    p.paragraph_format.space_after = Pt(0)
-    run = p.add_run(text.strip())
-    run.font.name = "Times New Roman"
-    run.font.size = Pt(14)
-
-
-def muqova(doc: Document, d: dict):
-    """Muqova sahifasi"""
+def muqova(doc, d):
     import datetime
-    lang = d["lang"]
     year = datetime.datetime.now().year
+    lang = d["lang"]
 
-    def cp(text, bold=False, size=13, space=0):
+    def cp(txt, bold=False, size=13, space=0):
         p = doc.add_paragraph()
         p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p.paragraph_format.first_line_indent = Cm(0)
         p.paragraph_format.space_before = Pt(space)
         p.paragraph_format.space_after = Pt(0)
         p.paragraph_format.line_spacing = Pt(19)
-        r = p.add_run(text)
-        r.bold = bold
-        r.font.name = "Times New Roman"
-        r.font.size = Pt(size)
+        r = p.add_run(txt); r.bold = bold
+        r.font.name = "Times New Roman"; r.font.size = Pt(size)
 
-    def rp(text, size=13):
+    def rp(txt, size=13):
         p = doc.add_paragraph()
         p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.RIGHT
         p.paragraph_format.first_line_indent = Cm(0)
@@ -659,9 +440,8 @@ def muqova(doc: Document, d: dict):
         p.paragraph_format.space_before = Pt(0)
         p.paragraph_format.space_after = Pt(0)
         p.paragraph_format.line_spacing = Pt(19)
-        r = p.add_run(text)
-        r.font.name = "Times New Roman"
-        r.font.size = Pt(size)
+        r = p.add_run(txt)
+        r.font.name = "Times New Roman"; r.font.size = Pt(size)
 
     if lang == "uz":
         cp("O'ZBEKISTON RESPUBLIKASI OLIY VA O'RTA MAXSUS TA'LIM VAZIRLIGI", bold=True, size=12)
@@ -670,46 +450,26 @@ def muqova(doc: Document, d: dict):
     else:
         cp("MINISTRY OF HIGHER AND SECONDARY SPECIALISED EDUCATION\nOF THE REPUBLIC OF UZBEKISTAN", bold=True, size=12)
 
-    cp("")
-    cp(d["university"].upper(), bold=True, size=13, space=6)
-    cp("")
-    cp(d["faculty"], size=12)
-    cp(d["direction"], size=12)
-
+    cp(""); cp(d["university"].upper(), bold=True, size=13, space=6)
+    cp(""); cp(d["faculty"], size=12); cp(d["direction"], size=12)
     cp(""); cp(""); cp("")
 
-    if lang == "uz":
-        cp(f'"{d["subject"]}"', size=12)
-        cp("fanidan", size=12)
-    elif lang == "ru":
-        cp(f'По предмету: "{d["subject"]}"', size=12)
-    else:
-        cp(f'Subject: "{d["subject"]}"', size=12)
+    if lang == "uz": cp(f'"{d["subject"]}"', size=12); cp("fanidan", size=12)
+    elif lang == "ru": cp(f'По предмету: "{d["subject"]}"', size=12)
+    else: cp(f'Subject: "{d["subject"]}"', size=12)
 
-    cp("")
-    cp(f'"{d["topic"].upper()}"', bold=True, size=14, space=4)
-    cp("")
+    cp(""); cp(f'"{d["topic"].upper()}"', bold=True, size=14, space=4); cp("")
 
-    if lang == "uz":
-        wname = "MUSTAQIL ISH" if d["work_type"] == "mustaqil" else "KURS ISHI"
-    elif lang == "ru":
-        wname = "САМОСТОЯТЕЛЬНАЯ РАБОТА" if d["work_type"] == "mustaqil" else "КУРСОВАЯ РАБОТА"
-    else:
-        wname = "INDEPENDENT WORK" if d["work_type"] == "mustaqil" else "COURSE WORK"
-
+    if lang == "uz": wname = "MUSTAQIL ISH" if d["work_type"] == "mustaqil" else "KURS ISHI"
+    elif lang == "ru": wname = "САМОСТОЯТЕЛЬНАЯ РАБОТА" if d["work_type"] == "mustaqil" else "КУРСОВАЯ РАБОТА"
+    else: wname = "INDEPENDENT WORK" if d["work_type"] == "mustaqil" else "COURSE WORK"
     cp(wname, bold=True, size=16, space=6)
 
     cp(""); cp(""); cp("")
 
-    if lang == "uz":
-        rp(f"{d['course']}-kurs {d['study_type']} talabasi:")
-        rp(d["student_name"], size=14)
-    elif lang == "ru":
-        rp(f"Студент {d['course']}-го курса ({d['study_type']}):")
-        rp(d["student_name"], size=14)
-    else:
-        rp(f"{d['course']}-year student ({d['study_type']}):")
-        rp(d["student_name"], size=14)
+    if lang == "uz": rp(f"{d['course']}-kurs {d['study_type']} talabasi:"); rp(d["student_name"], size=14)
+    elif lang == "ru": rp(f"Студент {d['course']}-го курса ({d['study_type']}):"); rp(d["student_name"], size=14)
+    else: rp(f"{d['course']}-year student ({d['study_type']}):"); rp(d["student_name"], size=14)
 
     if d["work_type"] == "kurs":
         cp("")
@@ -719,213 +479,108 @@ def muqova(doc: Document, d: dict):
         rp("______________________")
 
     cp(""); cp(""); cp(""); cp("")
-
-    if lang == "uz":
-        cp(f"Toshkent — {year}", size=13)
-    elif lang == "ru":
-        cp(f"Ташкент — {year}", size=13)
-    else:
-        cp(f"Tashkent — {year}", size=13)
+    if lang == "uz": cp(f"Toshkent — {year}", size=13)
+    elif lang == "ru": cp(f"Ташкент — {year}", size=13)
+    else: cp(f"Tashkent — {year}", size=13)
 
 
-def mundarija_mustaqil(doc: Document, secs: dict, lang: str):
-    doc.add_page_break()
-    if lang == "uz": h(doc, "MUNDARIJA")
-    elif lang == "ru": h(doc, "ОГЛАВЛЕНИЕ")
-    else: h(doc, "TABLE OF CONTENTS")
-    doc.add_paragraph("")
-
-    def row(text):
-        ref_line(doc, text)
-
-    if lang == "uz": row("Kirish ......................................................................................3")
-    elif lang == "ru": row("Введение ......................................................................................3")
-    else: row("Introduction ......................................................................................3")
-
-    for i in range(1, 4):
-        name = secs.get(f"BOLIM_{i}_NOMI", f"Bo'lim {i}")
-        row(f"{i}. {name} .........................................................................{i*4+2}")
-
-    if lang == "uz":
-        row("Xulosa ......................................................................................17")
-        row("Foydalanilgan adabiyotlar ..........................................................19")
-    elif lang == "ru":
-        row("Заключение ......................................................................................17")
-        row("Список литературы ......................................................................19")
-    else:
-        row("Conclusion ......................................................................................17")
-        row("References ......................................................................................19")
-
-
-def mundarija_kurs(doc: Document, secs: dict, lang: str):
-    doc.add_page_break()
-    if lang == "uz": h(doc, "MUNDARIJA")
-    elif lang == "ru": h(doc, "ОГЛАВЛЕНИЕ")
-    else: h(doc, "TABLE OF CONTENTS")
-    doc.add_paragraph("")
-
-    def row(text): ref_line(doc, text)
-
-    if lang == "uz": row("Kirish .................................................................................3")
-    elif lang == "ru": row("Введение .................................................................................3")
-    else: row("Introduction .................................................................................3")
-
-    b1 = secs.get("I_BOB_NOMI", "NAZARIY ASOSLAR")
-    row(f"I BOB. {b1.upper()} ..........................................5")
-    for i in range(1, 4):
-        nm = secs.get(f"PAR_1_{i}_NOMI", f"1.{i} § ")
-        row(f"   1.{i} § {nm} .........................................................{i*3+5}")
-
-    if lang == "uz": row("I Bob bo'yicha xulosalar ..........................................................16")
-    elif lang == "ru": row("Выводы по I главе .......................................................................16")
-    else: row("Chapter I conclusions ....................................................................16")
-
-    b2 = secs.get("II_BOB_NOMI", "AMALIY QISM")
-    row(f"II BOB. {b2.upper()} ........................................18")
-    for i in range(1, 4):
-        nm = secs.get(f"PAR_2_{i}_NOMI", f"2.{i} §")
-        row(f"   2.{i} § {nm} .........................................................{i*3+18}")
-
-    if lang == "uz":
-        row("II Bob bo'yicha xulosalar .........................................................28")
-        row("Xulosa .................................................................................30")
-        row("Glossariy ...............................................................................32")
-        row("Foydalanilgan adabiyotlar .........................................................34")
-    elif lang == "ru":
-        row("Выводы по II главе ......................................................................28")
-        row("Заключение .................................................................................30")
-        row("Глоссарий ...................................................................................32")
-        row("Список литературы ......................................................................34")
-    else:
-        row("Chapter II conclusions ...................................................................28")
-        row("Conclusion .................................................................................30")
-        row("Glossary ...................................................................................32")
-        row("References .................................................................................34")
-
-
-# ── Hujjat yaratish (Mustaqil ish) ───────────────────────────────
-def build_mustaqil(d: dict, secs: dict) -> bytes:
+# ── Hujjat yig'ish ────────────────────────────────────────────────
+def build_doc(d: dict, sections: dict) -> bytes:
     doc = Document()
     doc_setup(doc)
-    add_footer_pagenum(doc)
+    add_footer(doc)
     lang = d["lang"]
+    plan = d["plan"]
 
     muqova(doc, d)
-    mundarija_mustaqil(doc, secs, lang)
 
-    # Kirish
-    doc.add_page_break()
-    if lang == "uz": h(doc, "KIRISH")
-    elif lang == "ru": h(doc, "ВВЕДЕНИЕ")
-    else: h(doc, "INTRODUCTION")
-    body(doc, secs.get("KIRISH", ""))
-
-    # 3 ta bo'lim
-    for i in range(1, 4):
+    if d["work_type"] == "mustaqil":
+        # Kirish
         doc.add_page_break()
-        name = secs.get(f"BOLIM_{i}_NOMI", f"Bo'lim {i}")
-        h(doc, f"{i}. {name}")
-        body(doc, secs.get(f"BOLIM_{i}_MATN", ""))
+        if lang == "uz": heading(doc, "KIRISH")
+        elif lang == "ru": heading(doc, "ВВЕДЕНИЕ")
+        else: heading(doc, "INTRODUCTION")
+        body_text(doc, sections.get("kirish", ""))
 
-    # Xulosa
-    doc.add_page_break()
-    if lang == "uz": h(doc, "XULOSA")
-    elif lang == "ru": h(doc, "ЗАКЛЮЧЕНИЕ")
-    else: h(doc, "CONCLUSION")
-    body(doc, secs.get("XULOSA", ""))
+        # 3 bo'lim
+        for i in range(1, 4):
+            doc.add_page_break()
+            nom = plan.get(f"bolim{i}_nomi", f"Bo'lim {i}")
+            heading(doc, f"{i}. {nom}")
+            body_text(doc, sections.get(f"bolim{i}", ""))
 
-    # Adabiyotlar
-    doc.add_page_break()
-    if lang == "uz": h(doc, "FOYDALANILGAN ADABIYOTLAR")
-    elif lang == "ru": h(doc, "СПИСОК ЛИТЕРАТУРЫ")
-    else: h(doc, "REFERENCES")
-    for line in secs.get("ADABIYOTLAR", "").split("\n"):
-        if line.strip():
-            ref_line(doc, line)
+        # Xulosa
+        doc.add_page_break()
+        if lang == "uz": heading(doc, "XULOSA")
+        elif lang == "ru": heading(doc, "ЗАКЛЮЧЕНИЕ")
+        else: heading(doc, "CONCLUSION")
+        body_text(doc, sections.get("xulosa", ""))
 
-    buf = io.BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf.read()
+        # Adabiyotlar
+        doc.add_page_break()
+        if lang == "uz": heading(doc, "FOYDALANILGAN ADABIYOTLAR")
+        elif lang == "ru": heading(doc, "СПИСОК ЛИТЕРАТУРЫ")
+        else: heading(doc, "REFERENCES")
+        ref_text(doc, sections.get("adabiyotlar", ""))
 
+    else:  # kurs ishi
+        # Kirish
+        doc.add_page_break()
+        if lang == "uz": heading(doc, "KIRISH")
+        elif lang == "ru": heading(doc, "ВВЕДЕНИЕ")
+        else: heading(doc, "INTRODUCTION")
+        body_text(doc, sections.get("kirish", ""))
 
-# ── Hujjat yaratish (Kurs ishi) ───────────────────────────────────
-def build_kurs(d: dict, secs: dict) -> bytes:
-    doc = Document()
-    doc_setup(doc)
-    add_footer_pagenum(doc)
-    lang = d["lang"]
+        # I Bob
+        doc.add_page_break()
+        b1 = plan.get("bob1_nomi", "NAZARIY ASOSLAR")
+        heading(doc, f"I BOB. {b1}")
+        for i in range(1, 4):
+            nm = plan.get(f"bob1_par{i}", f"Paragraf 1.{i}")
+            heading(doc, f"1.{i} § {nm}", level=2)
+            body_text(doc, sections.get(f"bob1_par{i}", ""))
 
-    muqova(doc, d)
-    mundarija_kurs(doc, secs, lang)
+        doc.add_page_break()
+        if lang == "uz": heading(doc, "I BOB BO'YICHA XULOSALAR")
+        elif lang == "ru": heading(doc, "ВЫВОДЫ ПО I ГЛАВЕ")
+        else: heading(doc, "CHAPTER I CONCLUSIONS")
+        body_text(doc, sections.get("bob1_xulosa", ""))
 
-    # Kirish
-    doc.add_page_break()
-    if lang == "uz": h(doc, "KIRISH")
-    elif lang == "ru": h(doc, "ВВЕДЕНИЕ")
-    else: h(doc, "INTRODUCTION")
-    body(doc, secs.get("KIRISH", ""))
+        # II Bob
+        doc.add_page_break()
+        b2 = plan.get("bob2_nomi", "AMALIY QISM")
+        heading(doc, f"II BOB. {b2}")
+        for i in range(1, 4):
+            nm = plan.get(f"bob2_par{i}", f"Paragraf 2.{i}")
+            heading(doc, f"2.{i} § {nm}", level=2)
+            body_text(doc, sections.get(f"bob2_par{i}", ""))
 
-    # I Bob
-    doc.add_page_break()
-    b1 = secs.get("I_BOB_NOMI", "NAZARIY ASOSLAR")
-    h(doc, f"I BOB. {b1}")
-    for i in range(1, 4):
-        nm = secs.get(f"PAR_1_{i}_NOMI", f"Paragraf 1.{i}")
-        h(doc, f"1.{i} § {nm}", level=2)
-        body(doc, secs.get(f"PAR_1_{i}_MATN", ""))
+        doc.add_page_break()
+        if lang == "uz": heading(doc, "II BOB BO'YICHA XULOSALAR")
+        elif lang == "ru": heading(doc, "ВЫВОДЫ ПО II ГЛАВЕ")
+        else: heading(doc, "CHAPTER II CONCLUSIONS")
+        body_text(doc, sections.get("bob2_xulosa", ""))
 
-    # I Bob xulosalari
-    doc.add_page_break()
-    if lang == "uz": h(doc, "I BOB BO'YICHA XULOSALAR")
-    elif lang == "ru": h(doc, "ВЫВОДЫ ПО I ГЛАВЕ")
-    else: h(doc, "CHAPTER I CONCLUSIONS")
-    body(doc, secs.get("I_BOB_XULOSA", ""))
+        # Xulosa
+        doc.add_page_break()
+        if lang == "uz": heading(doc, "XULOSA")
+        elif lang == "ru": heading(doc, "ЗАКЛЮЧЕНИЕ")
+        else: heading(doc, "CONCLUSION")
+        body_text(doc, sections.get("xulosa", ""))
 
-    # II Bob
-    doc.add_page_break()
-    b2 = secs.get("II_BOB_NOMI", "AMALIY QISM")
-    h(doc, f"II BOB. {b2}")
-    for i in range(1, 4):
-        nm = secs.get(f"PAR_2_{i}_NOMI", f"Paragraf 2.{i}")
-        h(doc, f"2.{i} § {nm}", level=2)
-        body(doc, secs.get(f"PAR_2_{i}_MATN", ""))
+        # Glossariy
+        doc.add_page_break()
+        if lang == "uz": heading(doc, "GLOSSARIY")
+        elif lang == "ru": heading(doc, "ГЛОССАРИЙ")
+        else: heading(doc, "GLOSSARY")
+        ref_text(doc, sections.get("glossariy", ""))
 
-    # II Bob xulosalari
-    doc.add_page_break()
-    if lang == "uz": h(doc, "II BOB BO'YICHA XULOSALAR")
-    elif lang == "ru": h(doc, "ВЫВОДЫ ПО II ГЛАВЕ")
-    else: h(doc, "CHAPTER II CONCLUSIONS")
-    body(doc, secs.get("II_BOB_XULOSA", ""))
-
-    # Umumiy xulosa
-    doc.add_page_break()
-    if lang == "uz": h(doc, "XULOSA")
-    elif lang == "ru": h(doc, "ЗАКЛЮЧЕНИЕ")
-    else: h(doc, "CONCLUSION")
-    body(doc, secs.get("XULOSA", ""))
-
-    # Glossariy
-    doc.add_page_break()
-    if lang == "uz": h(doc, "GLOSSARIY")
-    elif lang == "ru": h(doc, "ГЛОССАРИЙ")
-    else: h(doc, "GLOSSARY")
-    raw_gloss = secs.get("GLOSSARIY", "")
-    for line in raw_gloss.split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        clean = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
-        ref_line(doc, clean)
-
-    # Adabiyotlar
-    doc.add_page_break()
-    if lang == "uz": h(doc, "FOYDALANILGAN ADABIYOTLAR")
-    elif lang == "ru": h(doc, "СПИСОК ЛИТЕРАТУРЫ")
-    else: h(doc, "REFERENCES")
-    for line in secs.get("ADABIYOTLAR", "").split("\n"):
-        if line.strip():
-            ref_line(doc, line)
+        # Adabiyotlar
+        doc.add_page_break()
+        if lang == "uz": heading(doc, "FOYDALANILGAN ADABIYOTLAR")
+        elif lang == "ru": heading(doc, "СПИСОК ЛИТЕРАТУРЫ")
+        else: heading(doc, "REFERENCES")
+        ref_text(doc, sections.get("adabiyotlar", ""))
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -936,29 +591,22 @@ def build_kurs(d: dict, secs: dict) -> bytes:
 # ── Conversation handlers ─────────────────────────────────────────
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data.clear()
-    await update.message.reply_text(
-        T["uz"]["welcome"], reply_markup=lang_kb(), parse_mode="Markdown"
-    )
+    await update.message.reply_text(T["uz"]["welcome"], reply_markup=lang_kb(), parse_mode="Markdown")
     return LANG
 
-
 async def cb_lang(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+    q = update.callback_query; await q.answer()
     lang = q.data.replace("lang_", "")
     ctx.user_data["lang"] = lang
     await q.edit_message_text(T[lang]["work_type"], reply_markup=work_kb(lang), parse_mode="Markdown")
     return WORK_TYPE
 
-
 async def cb_work(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+    q = update.callback_query; await q.answer()
     lang = ctx.user_data["lang"]
     ctx.user_data["work_type"] = q.data.replace("work_", "")
     await q.edit_message_text(T[lang]["university"], parse_mode="Markdown")
     return UNIVERSITY
-
 
 async def msg_university(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = ctx.user_data["lang"]
@@ -966,13 +614,11 @@ async def msg_university(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(T[lang]["faculty"], parse_mode="Markdown")
     return FACULTY
 
-
 async def msg_faculty(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = ctx.user_data["lang"]
     ctx.user_data["faculty"] = update.message.text.strip()
     await update.message.reply_text(T[lang]["direction"], parse_mode="Markdown")
     return DIRECTION
-
 
 async def msg_direction(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = ctx.user_data["lang"]
@@ -980,20 +626,17 @@ async def msg_direction(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(T[lang]["subject"], parse_mode="Markdown")
     return SUBJECT
 
-
 async def msg_subject(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = ctx.user_data["lang"]
     ctx.user_data["subject"] = update.message.text.strip()
     await update.message.reply_text(T[lang]["student"], parse_mode="Markdown")
     return STUDENT_NAME
 
-
 async def msg_student(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = ctx.user_data["lang"]
     ctx.user_data["student_name"] = update.message.text.strip()
     await update.message.reply_text(T[lang]["course"], parse_mode="Markdown")
     return COURSE
-
 
 async def msg_course(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = ctx.user_data["lang"]
@@ -1005,88 +648,112 @@ async def msg_course(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(T[lang]["study_type"], reply_markup=study_kb(lang))
     return STUDY_TYPE
 
-
 async def cb_study(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+    q = update.callback_query; await q.answer()
     lang = ctx.user_data["lang"]
     study_key = q.data.replace("study_", "")
     ctx.user_data["study_type"] = STUDY_TYPES[lang][study_key]
     await q.edit_message_text(T[lang]["topic"], parse_mode="Markdown")
     return TOPIC
 
-
 async def msg_topic(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = ctx.user_data["lang"]
     ctx.user_data["topic"] = update.message.text.strip()
     d = ctx.user_data
 
-    status = await update.message.reply_text(T[lang]["generating"], parse_mode="Markdown")
+    status = await update.message.reply_text(T[lang]["planning"], parse_mode="Markdown")
 
     try:
-        prompt = prompt_mustaqil(d) if d["work_type"] == "mustaqil" else prompt_kurs(d)
+        # 1. REJA TUZISH
+        logger.info("Reja tuzilmoqda...")
+        plan_raw = ask_gemini(make_plan_prompt(d))
+        clean = plan_raw.replace("```json","").replace("```","").strip()
+        plan = json.loads(clean)
+        d["plan"] = plan
+        logger.info(f"Reja tayyor: {list(plan.keys())}")
 
-        logger.info(f"Gemini API chaqirilmoqda: {d['topic'][:30]}")
-        response = gemini.generate_content(prompt)
-        raw = response.text
-        logger.info(f"Gemini javobi olindi: {len(raw)} belgi")
-        secs = parse_sections(raw)
+        sections = {}
 
         if d["work_type"] == "mustaqil":
-            docx_bytes = build_mustaqil(d, secs)
-            fname = f"mustaqil_ish_{d['topic'][:25].replace(' ', '_')}.docx"
+            steps = [
+                ("kirish", "bolim", "Kirish / Введение", "1/6"),
+                ("bolim1", "bolim", plan.get("bolim1_nomi","Bo'lim 1"), "2/6"),
+                ("bolim2", "bolim", plan.get("bolim2_nomi","Bo'lim 2"), "3/6"),
+                ("bolim3", "bolim", plan.get("bolim3_nomi","Bo'lim 3"), "4/6"),
+                ("xulosa", "xulosa", "Xulosa / Заключение", "5/6"),
+                ("adabiyotlar", "adabiyotlar", "Adabiyotlar / Литература", "6/6"),
+            ]
         else:
-            docx_bytes = build_kurs(d, secs)
-            fname = f"kurs_ishi_{d['topic'][:25].replace(' ', '_')}.docx"
+            steps = [
+                ("kirish", "kirish", "Kirish / Введение", "1/10"),
+                ("bob1_par1", "bolim", plan.get("bob1_par1","1.1 §"), "2/10"),
+                ("bob1_par2", "bolim", plan.get("bob1_par2","1.2 §"), "3/10"),
+                ("bob1_par3", "bolim", plan.get("bob1_par3","1.3 §"), "4/10"),
+                ("bob1_xulosa", "bob_xulosa", plan.get("bob1_nomi","I Bob"), "5/10"),
+                ("bob2_par1", "bolim", plan.get("bob2_par1","2.1 §"), "6/10"),
+                ("bob2_par2", "bolim", plan.get("bob2_par2","2.2 §"), "7/10"),
+                ("bob2_par3", "bolim", plan.get("bob2_par3","2.3 §"), "8/10"),
+                ("bob2_xulosa", "bob_xulosa", plan.get("bob2_nomi","II Bob"), "9/10"),
+                ("xulosa", "xulosa", "Xulosa / Заключение", "9/10"),
+                ("glossariy", "glossariy", "Glossariy / Глоссарий", "9/10"),
+                ("adabiyotlar", "adabiyotlar", "Adabiyotlar / Литература", "10/10"),
+            ]
+
+        # 2. BO'LIMLARNI YOZISH
+        for key, stype, sname, progress in steps:
+            logger.info(f"Yozilmoqda: {key} - {sname}")
+            msg = T[lang]["generating_section"].format(section=sname, progress=progress)
+            await status.edit_text(msg, parse_mode="Markdown")
+            sections[key] = write_section(d, sname, stype, plan)
+            logger.info(f"Tayyor: {key} - {len(sections[key])} belgi")
+
+        # 3. FAYLNI YIGISH
+        await status.edit_text(T[lang]["combining"], parse_mode="Markdown")
+        docx_bytes = build_doc(d, sections)
+
+        fname = f"{'mustaqil_ish' if d['work_type']=='mustaqil' else 'kurs_ishi'}_{d['topic'][:20].replace(' ','_')}.docx"
 
         await status.edit_text(T[lang]["done"], parse_mode="Markdown")
         await update.message.reply_document(
             document=io.BytesIO(docx_bytes),
             filename=fname,
-            caption=f"📄 {d['work_type'].upper()} | {d['topic']}",
+            caption=f"📄 {d['topic']}",
         )
 
     except Exception as e:
-        logger.error(f"Xatolik turi: {type(e).__name__}")
-        logger.error(f"Xatolik matni: {str(e)}")
+        logger.error(f"Xatolik: {type(e).__name__}: {str(e)}")
         await status.edit_text(T[lang]["error"])
 
     await update.message.reply_text(T[lang]["restart"])
     return ConversationHandler.END
-
 
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang = ctx.user_data.get("lang", "uz")
     await update.message.reply_text(T[lang]["restart"])
     return ConversationHandler.END
 
-
-# ── Main ──────────────────────────────────────────────────────────
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", cmd_start)],
         states={
-            LANG:         [CallbackQueryHandler(cb_lang,       pattern="^lang_")],
-            WORK_TYPE:    [CallbackQueryHandler(cb_work,       pattern="^work_")],
+            LANG:         [CallbackQueryHandler(cb_lang,    pattern="^lang_")],
+            WORK_TYPE:    [CallbackQueryHandler(cb_work,    pattern="^work_")],
             UNIVERSITY:   [MessageHandler(filters.TEXT & ~filters.COMMAND, msg_university)],
             FACULTY:      [MessageHandler(filters.TEXT & ~filters.COMMAND, msg_faculty)],
             DIRECTION:    [MessageHandler(filters.TEXT & ~filters.COMMAND, msg_direction)],
             SUBJECT:      [MessageHandler(filters.TEXT & ~filters.COMMAND, msg_subject)],
             STUDENT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, msg_student)],
             COURSE:       [MessageHandler(filters.TEXT & ~filters.COMMAND, msg_course)],
-            STUDY_TYPE:   [CallbackQueryHandler(cb_study,      pattern="^study_")],
+            STUDY_TYPE:   [CallbackQueryHandler(cb_study,   pattern="^study_")],
             TOPIC:        [MessageHandler(filters.TEXT & ~filters.COMMAND, msg_topic)],
         },
         fallbacks=[CommandHandler("cancel", cmd_cancel)],
         allow_reentry=True,
     )
-
     app.add_handler(conv)
     logger.info("✅ Bot ishga tushdi!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-
 
 if __name__ == "__main__":
     main()
