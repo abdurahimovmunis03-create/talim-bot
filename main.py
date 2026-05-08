@@ -31,7 +31,10 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GEMINI_KEY = os.environ["GEMINI_API_KEY"]
 genai.configure(api_key=GEMINI_KEY)
-gemini = genai.GenerativeModel("gemini-2.0-flash")
+gemini = genai.GenerativeModel(
+    model_name="gemini-1.5-flash",
+    generation_config={"max_output_tokens": 8192, "temperature": 0.7}
+)
 
 # Suhbat bosqichlari
 LANG, WORK_TYPE, UNIVERSITY, FACULTY, DIRECTION, SUBJECT, STUDENT_NAME, COURSE, STUDY_TYPE, TOPIC = range(10)
@@ -1023,8 +1026,10 @@ async def msg_topic(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         prompt = prompt_mustaqil(d) if d["work_type"] == "mustaqil" else prompt_kurs(d)
 
+        logger.info(f"Gemini API chaqirilmoqda: {d['topic'][:30]}")
         response = gemini.generate_content(prompt)
         raw = response.text
+        logger.info(f"Gemini javobi olindi: {len(raw)} belgi")
         secs = parse_sections(raw)
 
         if d["work_type"] == "mustaqil":
@@ -1042,7 +1047,8 @@ async def msg_topic(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
     except Exception as e:
-        logger.error(f"Xatolik: {e}")
+        logger.error(f"Xatolik turi: {type(e).__name__}")
+        logger.error(f"Xatolik matni: {str(e)}")
         await status.edit_text(T[lang]["error"])
 
     await update.message.reply_text(T[lang]["restart"])
