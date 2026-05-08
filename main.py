@@ -14,7 +14,7 @@ from telegram.ext import (
     CallbackQueryHandler, ConversationHandler,
     filters, ContextTypes
 )
-import anthropic
+import google.generativeai as genai
 from docx import Document
 from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -29,8 +29,9 @@ logger = logging.getLogger(__name__)
 
 # ── Sozlamalar ────────────────────────────────────────────────────
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-ANTHROPIC_KEY = os.environ["ANTHROPIC_API_KEY"]
-claude = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+GEMINI_KEY = os.environ["GEMINI_API_KEY"]
+genai.configure(api_key=GEMINI_KEY)
+gemini = genai.GenerativeModel("gemini-2.0-flash")
 
 # Suhbat bosqichlari
 LANG, WORK_TYPE, UNIVERSITY, FACULTY, DIRECTION, SUBJECT, STUDENT_NAME, COURSE, STUDY_TYPE, TOPIC = range(10)
@@ -1022,12 +1023,8 @@ async def msg_topic(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         prompt = prompt_mustaqil(d) if d["work_type"] == "mustaqil" else prompt_kurs(d)
 
-        response = claude.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=8000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = response.content[0].text
+        response = gemini.generate_content(prompt)
+        raw = response.text
         secs = parse_sections(raw)
 
         if d["work_type"] == "mustaqil":
