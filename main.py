@@ -25,7 +25,7 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 GEMINI_KEY = os.environ["GEMINI_API_KEY"]
 genai.configure(api_key=GEMINI_KEY)
 gemini = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
+    model_name="gemini-2.0-flash-lite",
     generation_config={"max_output_tokens": 8192, "temperature": 0.7}
 )
 
